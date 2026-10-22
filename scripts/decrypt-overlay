@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Dechiffre les trames E5A1 d'un PCAP du laboratoire (cle de DEMO publique).
+
+usage : decrypt-overlay FICHIER.pcap [--kind probe,pong,req,resp] [--json]
+La cle est lue dans DEMO_KEY_HEX (definie sur paris-edge et berlin-edge).
+Necessite tshark. Outil pedagogique : montre ce qu'un tiers possedant la cle lirait.
+"""
+import json, os, subprocess, sys
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+MAGIC, AAD = b'E5A1', b'MERIDIAN-LAB'
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ('-h', '--help'):
+        print(__doc__); sys.exit(0 if args else 2)
+    pcap = args[0]
+    kinds = None
+    if '--kind' in args:
+        kinds = set(args[args.index('--kind') + 1].split(','))
+    as_json = '--json' in args
+    key_hex = os.environ.get('DEMO_KEY_HEX')
+    if not key_hex:
+        sys.exit('DEMO_KEY_HEX absent : lancer depuis paris-edge ou berlin-edge')
+    aes = AESGCM(bytes.fromhex(key_hex))
+    cmd = ['tshark', '-r', pcap, '-Y', 'udp.port==45900', '-T', 'fields', '-E', 'separator=|',
+           '-e', 'frame.number', '-e', 'frame.time_relative', '-e', 'ip.src', '-e', 'ip.dst',
+           '-e', 'udp.payload']
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        sys.exit(res.stderr.strip() or 'tshark a echoue')
+    shown = 0
+    for line in res.stdout.splitlines():
+        parts = line.split('|')
+        if len(parts) < 5 or not parts[4]:
+            continue
+        num, rel, src, dst, hexpl = parts[:5]
+        raw = bytes.fromhex(hexpl.replace(':', ''))
+        if not raw.startswith(MAGIC) or len(raw) < 33:
+            continue
+        try:
+            msg = json.loads(aes.decrypt(raw[4:16], raw[16:], AAD))
+        except Exception as exc:
+            print(f'#{num} {src} -> {dst} : dechiffrement impossible ({exc.__class__.__name__})')
+            continue
+        if kinds and msg.get('kind') not in kinds:
+            continue
+        shown += 1
+        if as_json:
+            print(json.dumps({'frame': int(num), 't': float(rel), 'src': src, 'dst': dst, 'msg': msg}))
+            continue
+        extra = ''
+        if msg.get('kind') == 'req':
+            extra = f"route={msg.get('route')}"
+        elif msg.get('kind') == 'resp':
+            extra = f"code={msg.get('code')} path={msg.get('path')} body={str(msg.get('body'))[:70]}"
+        print(f"#{num:>4} t={float(rel):8.3f}s {src:>13} -> {dst:<13} len={len(raw):>4} "
+              f"kind={msg.get('kind'):<5} id={str(msg.get('id'))[:8]} {extra}")
+    print(f'# {shown} message(s) dechiffre(s) depuis {pcap}', file=sys.stderr)
+
+if __name__ == '__main__':
+    main()

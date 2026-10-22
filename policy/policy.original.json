@@ -1,0 +1,9 @@
+{
+  "generation": "2026-10-meridian-v1",
+  "applications": {
+    "erp": {"preferred": "mpls", "max_rtt_ms": 100, "max_loss_pct": 20},
+    "teams": {"preferred": "internet", "max_rtt_ms": 100, "max_loss_pct": 20},
+    "backup": {"preferred": "internet", "max_rtt_ms": 350, "max_loss_pct": 60}
+  },
+  "guest_blocked": ["erp", "teams", "backup"]
+}

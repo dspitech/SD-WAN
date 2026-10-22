@@ -1,0 +1,17 @@
+#!/bin/sh
+# proof : execute une commande et conserve sa sortie horodatee dans /captures/preuves.
+#   proof NOM commande [arguments...]
+# Exemple : proof A_status curl -s http://10.10.0.1:8080/status
+if [ $# -lt 2 ]; then echo "usage : proof NOM commande [arguments...]" >&2; exit 2; fi
+name=$1; shift
+mkdir -p /captures/preuves
+out=/captures/preuves/$name.txt
+{
+  echo "# preuve : $name"
+  echo "# date   : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "# noeud  : $(hostname)"
+  echo "# cmd    : $*"
+  echo
+  "$@"
+} 2>&1 | tee "$out"
+echo "# enregistre dans captures/preuves/$name.txt" >&2

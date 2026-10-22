@@ -1,0 +1,20 @@
+#!/bin/sh
+# ifmap : associe chaque interface IPv4 du conteneur a son reseau logique du TP.
+#   ifmap            -> tableau complet interface / adresse / reseau
+#   ifmap internet   -> affiche uniquement le nom de l'interface (usage en script)
+# Reseaux : paris_lan guest_lan berlin_lan internet mpls control
+ip -o -4 addr show scope global | awk -v want="$1" '
+function net(a) {
+  if (a ~ /^10\.10\.0\./)   return "paris_lan"
+  if (a ~ /^10\.11\.0\./)   return "guest_lan"
+  if (a ~ /^10\.20\.0\./)   return "berlin_lan"
+  if (a ~ /^172\.28\.10\./) return "internet"
+  if (a ~ /^172\.28\.20\./) return "mpls"
+  if (a ~ /^172\.28\.30\./) return "control"
+  return "inconnu"
+}
+BEGIN { if (want == "") printf "%-10s %-18s %s\n", "INTERFACE", "ADRESSE", "RESEAU" }
+{ split($4, p, "/"); n = net(p[1])
+  if (want == "") printf "%-10s %-18s %s\n", $2, $4, n
+  else if (n == want) { print $2; found = 1 } }
+END { if (want != "" && !found) exit 1 }'

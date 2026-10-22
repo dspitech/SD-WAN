@@ -1,0 +1,15 @@
+#!/bin/sh
+# labwait : attend que les deux transports soient mesures "up" par l'Edge Paris.
+#   labwait [secondes]   (defaut 90)
+EDGE=${EDGE:-http://10.10.0.1:8080}
+T=${1:-90}
+i=0
+while [ "$i" -lt "$T" ]; do
+  if curl -sf -m 2 "$EDGE/status" | jq -e '.paths.internet.up and .paths.mpls.up' >/dev/null 2>&1; then
+    echo "pret : internet et mpls mesures up apres ${i}s"
+    exit 0
+  fi
+  i=$((i + 1)); sleep 1
+done
+echo "delai depasse apres ${T}s : voir docker compose logs paris-edge" >&2
+exit 1

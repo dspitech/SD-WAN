@@ -1,0 +1,160 @@
+name: meridian-sdwan-lab
+
+# Parametres communs : une seule image pour les sept noeuds.
+x-lab: &lab
+  image: meridian-sdwan-lab:1.1
+  build: .
+  init: true
+  stop_grace_period: 3s
+
+# Cle AES-256 de DEMONSTRATION (publique, jamais pour la production).
+x-demo-key: &demo-key
+  DEMO_KEY_HEX: "b73e9c52a67462fe29a8bcf2fa33487b676aa5945899c317829dba8706184671"
+
+services:
+  controller:
+    <<: *lab
+    hostname: controller
+    command: ["python", "-u", "/lab/controller.py", "172.28.30.10"]
+    volumes:
+      # Le DOSSIER est monte (et non le fichier) : une modification de
+      # policy.json par un editeur est toujours vue par le conteneur.
+      - ./policy:/lab/policy:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://172.28.30.10:9000/policy"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    networks:
+      control:
+        ipv4_address: 172.28.30.10
+
+  paris-edge:
+    <<: *lab
+    hostname: paris-edge
+    command: ["python", "-u", "/lab/edge.py", "paris"]
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment: *demo-key
+    volumes:
+      - ./captures:/captures
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://10.10.0.1:8080/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    networks:
+      paris_lan:
+        ipv4_address: 10.10.0.1
+      guest_lan:
+        ipv4_address: 10.11.0.1
+      internet:
+        ipv4_address: 172.28.10.10
+      mpls:
+        ipv4_address: 172.28.20.10
+      control:
+        ipv4_address: 172.28.30.11
+
+  berlin-edge:
+    <<: *lab
+    hostname: berlin-edge
+    command: ["python", "-u", "/lab/edge.py", "berlin"]
+    cap_add: [NET_ADMIN, NET_RAW]
+    environment: *demo-key
+    volumes:
+      - ./captures:/captures
+    networks:
+      berlin_lan:
+        ipv4_address: 10.20.0.1
+      internet:
+        ipv4_address: 172.28.10.20
+      mpls:
+        ipv4_address: 172.28.20.20
+      control:
+        ipv4_address: 172.28.30.12
+
+  employee:
+    <<: *lab
+    hostname: employee
+    command: ["sleep", "infinity"]
+    volumes:
+      - ./captures:/captures
+    networks:
+      paris_lan:
+        ipv4_address: 10.10.0.10
+
+  guest:
+    <<: *lab
+    hostname: guest
+    command: ["sleep", "infinity"]
+    volumes:
+      - ./captures:/captures
+    networks:
+      guest_lan:
+        ipv4_address: 10.11.0.10
+
+  erp:
+    <<: *lab
+    hostname: erp
+    command: ["python", "-u", "/lab/app.py", "erp", "10.20.0.20"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://10.20.0.20:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    networks:
+      berlin_lan:
+        ipv4_address: 10.20.0.20
+
+  saas:
+    <<: *lab
+    hostname: saas
+    command: ["python", "-u", "/lab/app.py", "saas", "172.28.10.40"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://172.28.10.40:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+    networks:
+      internet:
+        ipv4_address: 172.28.10.40
+
+# Tous les reseaux sont "internal" : aucun acces a l'Internet reel, aucun
+# port publie. L'adresse .254 de chaque sous-reseau est reservee a la
+# passerelle Docker (pont de l'hote) afin que .1 reste libre pour les Edges.
+networks:
+  paris_lan:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.254
+  guest_lan:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.11.0.0/24
+          gateway: 10.11.0.254
+  berlin_lan:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.20.0.0/24
+          gateway: 10.20.0.254
+  internet:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+          gateway: 172.28.10.254
+  mpls:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.20.0/24
+          gateway: 172.28.20.254
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.30.0/24
+          gateway: 172.28.30.254

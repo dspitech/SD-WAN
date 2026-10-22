@@ -1,0 +1,16 @@
+#!/bin/sh
+# sla : resume de l'etat des transports et du chemin choisi par application.
+#   sla                         (depuis employee)
+#   EDGE=http://10.11.0.1:8080 sla   (depuis guest)
+EDGE=${EDGE:-http://10.10.0.1:8080}
+echo "# heure $(date +%T)"
+echo "== Transports (vue Edge Paris) =="
+curl -s -m 4 "$EDGE/status" | jq -r '
+  "generation=\(.generation) controller_reachable=\(.controller_reachable)",
+  (.paths | to_entries[] |
+   "\(.key)\tup=\(.value.up)\trtt_ms=\(.value.rtt_ms)\tloss_pct=\(.value.loss_pct)\tobs=\(.value.observations)")'
+echo "== Chemin choisi par application =="
+for app in erp teams backup; do
+  curl -s -m 8 "$EDGE/$app" | jq -r --arg a "$app" \
+    '"\($a)\tpath=\(.selected_path // "-")\treason=\(.policy_reason // .reason // "-")\terror=\(.error // "-")"'
+done

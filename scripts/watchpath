@@ -1,0 +1,15 @@
+#!/bin/sh
+# watchpath : releve chaque seconde le chemin choisi et les mesures SLA.
+#   watchpath [application] [duree_s]   (defaut : erp 30)
+# Sert a mesurer le temps de reaction d'un basculement.
+APP=${1:-erp}
+DUR=${2:-30}
+EDGE=${EDGE:-http://10.10.0.1:8080}
+END=$(( $(date +%s) + DUR ))
+echo "heure     app   chemin   raison | internet[...] mpls[...]"
+while [ "$(date +%s)" -lt "$END" ]; do
+  r=$(curl -s -m 7 "$EDGE/$APP" | jq -r '"\(.selected_path // "none") \(.policy_reason // .error)"')
+  s=$(curl -s -m 3 "$EDGE/status" | jq -r '[.paths.internet, .paths.mpls] | map("up=\(.up) rtt=\(.rtt_ms) loss=\(.loss_pct)") | "internet[\(.[0])] mpls[\(.[1])]"')
+  echo "$(date +%T)  $APP  $r | $s"
+  sleep 1
+done
