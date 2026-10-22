@@ -1,0 +1,195 @@
+============================================================
+QUESTIONS A POSER AU PROFESSEUR - TP MERIDIAN LAB (SD-WAN)
+============================================================
+
+Chaque question est suivie du contexte observe pendant le TP,
+pour que le professeur comprenne le point de blocage.
+
+
+------------------------------------------------------------
+A. CONCEPTS SD-WAN
+------------------------------------------------------------
+1. Dans le TP, l'Edge est un proxy applicatif : il termine la
+   session HTTP et cree un nouveau message chiffre. Dans un vrai
+   SD-WAN, l'Edge transporte-t-il toujours le paquet IP d'origine
+   de bout en bout (tunnel L3), ou existe-t-il des produits qui
+   fonctionnent aussi au niveau applicatif ?
+
+2. Quelle est la difference exacte entre le plan de controle et
+   le plan de gestion ? Dans le TP, le manager (TCP 9000) joue les
+   deux roles : comment les separe-t-on en production (par
+   exemple les composants vSmart et vManage chez certains
+   constructeurs) ?
+
+3. Dans le TP, le choix du chemin se fait par application avec un
+   RTT maximum et une perte maximum. En production, quels autres
+   criteres sont utilises (gigue, bande passante disponible,
+   cout du lien, DSCP, identification applicative par DPI) ?
+
+4. Un vrai SD-WAN peut-il envoyer un meme flux sur deux chemins
+   en meme temps (duplication de paquets pour la voix) ou faire
+   du per-packet load balancing ? Quelles en sont les limites
+   (reordonnancement, gigue) ?
+
+5. Le "MPLS simule" du TP est un reseau IP ordinaire. Dans une
+   vraie entreprise, comment le MPLS operateur (VPN L3, VRF,
+   classes de service) interagit-il avec l'overlay SD-WAN ?
+   Le SD-WAN chiffre-t-il aussi le trafic qui passe sur le MPLS ?
+
+
+------------------------------------------------------------
+B. MESURES, SLA ET BASCULE
+------------------------------------------------------------
+6. Pendant le blackout du lien mpls, le RTT affiche 1,2 a 1,8 ms
+   puis "null" alors que le lien est mort : la moyenne ne porte
+   que sur les sondes qui ont repondu. Comment les produits reels
+   evitent-ils ce biais ? Utilisent-ils BFD ou des sondes avec
+   horodatage ?
+
+7. Dans le kit, un transport est "down" apres 3,5 s sans reponse
+   et la fenetre est de 12 echantillons. Quels sont les ordres de
+   grandeur utilises en production (temps de detection BFD,
+   intervalle de sondes) et comment choisir ces valeurs sans
+   provoquer de faux positifs ?
+
+8. Mon blackout a produit degraded-no-path-meets-sla et non
+   alternate-within-sla, car le delai de 220 ms du brownout
+   precedent etait encore applique a internet. Dans ce cas, est-il
+   preferable de continuer sur un chemin hors SLA ou de refuser la
+   requete ? Qui doit decider de ce comportement, la politique ou
+   l'equipement ?
+
+9. Comment dimensionner la temporisation de maintien et le seuil
+   de retour pour eviter le flapping ? Existe-t-il une methode ou
+   des valeurs de reference (par exemple retour sur le chemin
+   prefere apres 60 s de stabilite) ?
+
+10. La requete emise pendant la fenetre de detection a recu un
+    504 overlay-timeout apres 5 s. Dans un produit reel, la
+    session est-elle perdue ou rejouee automatiquement sur l'autre
+    chemin ? Et pour les sessions TCP deja etablies, que se passe-t-il
+    lors d'une bascule ?
+
+
+------------------------------------------------------------
+C. CAPTURES ET OBSERVATIONS
+------------------------------------------------------------
+11. Pendant l'arret du controleur, la capture du lien de controle
+    (07_control.pcap, filtre tcp port 9000) n'affiche aucun paquet,
+    et seule la reprise apparait. Mon hypothese est que l'Edge reste
+    bloque en resolution ARP (adresse du manager absente) et que le
+    SYN ne part jamais. Est-ce correct ? Comment le verifier (capture
+    avec le filtre arp) ?
+
+12. Ma capture de breakout SaaS (filtre host 172.28.10.40) ne peut
+    pas prouver l'absence de trafic UDP 45900 vers Berlin, car le
+    filtre l'exclut par construction. Quelle est la bonne methode
+    pour demontrer une absence de trafic ?
+
+13. Avec tcpdump -i any, les paquets portent un en-tete "Linux
+    cooked" (SLL) a la place d'Ethernet. Dans quels cas faut-il
+    absolument capturer une seule interface pour exploiter les
+    adresses MAC ou les types Ethernet (comme 0x0800 contre
+    0x8847 pour MPLS) ?
+
+14. Dans un vrai tunnel IPsec ESP, que voit-on sur le lien WAN avec
+    tshark, et comment dechiffre-t-on la capture pour analyse
+    (cles ESP, SPI) ? Est-ce une pratique acceptable en entreprise ?
+
+
+------------------------------------------------------------
+D. SECURITE
+------------------------------------------------------------
+15. La cle AES du kit est statique et publique, et le nonce est
+    aleatoire sans compteur. A partir de quel volume de messages
+    le risque de collision de nonce (12 octets aleatoires avec
+    AES-GCM) devient-il reel ? Pourquoi une collision est-elle si
+    grave avec GCM ?
+
+16. IKEv2 apporte la PFS et le rekeying. En pratique, quelle duree
+    de vie donne-t-on aux associations de securite (temps et
+    volume), et comment dimensionner cette duree par rapport au
+    temps de reparation d'une panne des controleurs ?
+
+17. L'Edge decide qu'un client est "invite" d'apres l'adresse
+    d'ecoute ou l'adresse source (10.11.0.x). Dans un SD-WAN reel,
+    la segmentation est-elle portee par un identifiant de VPN
+    transporte dans l'overlay ? Comment l'associer a l'identite de
+    l'utilisateur (802.1X, NAC) et non a son adresse IP ?
+
+18. Entre NGFW local, SSE cloud et SASE, comment choisir pour un
+    site comme Paris avec du SaaS et des utilisateurs nomades ?
+    Le breakout local est-il toujours preferable a l'envoi du trafic
+    Internet vers un point de presence SSE ?
+
+19. Le plan de controle du kit est en HTTP clair sans
+    authentification. Dans les solutions du commerce, comment
+    l'Edge authentifie-t-il le manager et inversement (certificats
+    constructeur, liste blanche de numeros de serie, mTLS) ?
+
+
+------------------------------------------------------------
+E. ZTP, HAUTE DISPONIBILITE ET CONCEPTION
+------------------------------------------------------------
+20. Dans le ZTP, si le service de redirection du constructeur
+    (cloud) est indisponible, comment un nouvel Edge peut-il
+    decouvrir ses controleurs ? Quelles alternatives existent
+    (option DHCP, DNS, cle USB) et laquelle est conseillee ?
+
+21. En cas de perte prolongee des controleurs ou de la PKI, les
+    tunnels IPsec tombent a l'expiration des associations de
+    securite. Existe-t-il un mode degrade documente (cles de
+    secours, duree de tolerance configurable) et comment le
+    tester sans risque ?
+
+22. Pour le HLD de Meridian (Paris, Londres, Berlin, 2 data
+    centers, SaaS), faut-il privilegier un maillage complet ou une
+    topologie hub and spoke ? Quels criteres (latence entre sites,
+    nombre d'Edges, charge des hubs) fixent le choix ?
+
+23. Pour la comparaison de fournisseurs, quels criteres du cours
+    faut-il privilegier pour un jury (gestion, overlay, securite,
+    HA, cout) et quel niveau de detail est attendu sans inventer
+    de prix constructeur ?
+
+24. Pour le modele de cout TCO sur 36 mois, certains postes sont-ils
+    obligatoires (licences par Edge et par debit, liens operateur,
+    support, supervision, exploitation interne) ? Doit-on integrer
+    l'economie potentielle sur le MPLS, et comment la justifier
+    sans devis reels ?
+
+
+------------------------------------------------------------
+F. EVALUATION ET RENDU
+------------------------------------------------------------
+25. Pour la preuve D, le temps de reaction du brownout n'a pas ete
+    mesure rigoureusement (releve commence apres l'injection). Dois-je
+    refaire la mesure ou est-il acceptable de le signaler comme
+    limite dans le rapport ?
+
+26. Le sujet precise que le TP est "sans correction". Les reponses
+    aux questions de recherche (par exemple le ping qui ne garantit
+    pas l'accessibilite de l'ERP) sont-elles evaluees sur la
+    methode de demonstration ou sur la justesse de la conclusion ?
+
+27. Le rapport final doit-il presenter les limites de l'emulateur
+    (pas d'IPsec, pas de MPLS reel, pas de NGFW) dans une section
+    dediee, et le diagnostic final d'une page doit-il suivre un
+    format impose (cause, preuve, consequence, remediation) ?
+
+28. Les captures facultatives (03 a 07) sont valorisees si elles sont
+    analysees. Quel niveau d'analyse est attendu pour obtenir la
+    totalite des 5 points du critere captures ?
+
+
+------------------------------------------------------------
+G. QUESTIONS PERSONNELLES (a completer)
+------------------------------------------------------------
+- Points du cours que je n'ai pas bien compris :
+  ...
+
+- Passages du TP ou j'ai eu un resultat different de l'attendu :
+  ...
+
+- Sujets que je voudrais approfondir (OMP, BFD, DPI, SSE...) :
+  ...

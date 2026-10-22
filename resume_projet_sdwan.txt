@@ -1,0 +1,306 @@
+============================================================
+RESUME GLOBAL - TP MERIDIAN LAB (SD-WAN multisite, multi-transport)
+============================================================
+
+Contexte : TP E5 CCSN / SD-WAN, 4 heures, 100 % ligne de commande
+(docker compose, tcpdump, tshark) sur Ubuntu Server.
+Entreprise fictive : Meridian Technologies, sites de Paris et Berlin.
+
+
+------------------------------------------------------------
+1. OBJECTIF DU PROJET
+------------------------------------------------------------
+Monter un laboratoire SD-WAN avec deux transports en parallele,
+capturer le trafic reel, analyser une encapsulation chiffree,
+provoquer des pannes, puis proposer des politiques argumentees.
+
+Question centrale a savoir expliquer, preuves a l'appui :
+- ce qui circule sur les liens ;
+- comment les politiques decident du chemin ;
+- ce qui continue a fonctionner en cas de panne.
+
+
+------------------------------------------------------------
+2. ARCHITECTURE DU LABORATOIRE
+------------------------------------------------------------
+7 conteneurs : controller, paris-edge, berlin-edge, employee,
+guest, erp, saas.
+
+6 reseaux Docker (tous en mode "internal", aucun acces Internet) :
+
+  paris_lan   10.10.0.0/24    employes de Paris
+  guest_lan   10.11.0.0/24    invites de Paris
+  berlin_lan  10.20.0.0/24    serveur ERP de Berlin
+  internet    172.28.10.0/24  transport 1 (Internet simule) + SaaS
+  mpls        172.28.20.0/24  transport 2 ("MPLS" simule)
+  control     172.28.30.0/24  plan de controle (politique)
+
+Adresses cles :
+  employee 10.10.0.10      guest 10.11.0.10
+  paris-edge : 10.10.0.1 / 10.11.0.1 / 172.28.10.10 /
+               172.28.20.10 / 172.28.30.11
+  berlin-edge : 10.20.0.1 / 172.28.10.20 / 172.28.20.20 /
+                172.28.30.12
+  erp 10.20.0.20     saas 172.28.10.40     controller 172.28.30.10
+
+Ports :
+  TCP 8080   proxy HTTP de l'Edge Paris (LAN uniquement)
+  UDP 45900  overlay chiffre entre Edges (sondes + donnees)
+  TCP 9000   manager (distribution de la politique)
+  TCP 8000   serveurs ERP et SaaS
+
+Principe de fonctionnement d'une requete :
+  employee --HTTP--> Edge Paris --UDP 45900 chiffre--> Edge Berlin
+  --HTTP--> ERP, puis la reponse revient par le meme chemin.
+
+L'Edge est un PROXY APPLICATIF, pas un routeur : il termine la
+session HTTP et cree un nouveau message chiffre. Aucun paquet IP
+d'origine n'est transporte. C'est pourquoi employee et guest n'ont
+pas de route par defaut et qu'un ping employee -> erp ne marche pas.
+
+
+------------------------------------------------------------
+3. CE QUI EST REEL ET CE QUI EST SIMULE
+------------------------------------------------------------
+Reel :
+- trafic IP/UDP/TCP capture avec tcpdump, decode avec tshark ;
+- sondes RTT et perte, mesures sur fenetre glissante ;
+- chiffrement AES-256-GCM ;
+- choix de chemin selon une politique et des seuils SLA.
+
+Simule ou limite :
+- le "MPLS" est un second reseau IP ordinaire (pas de labels) ;
+- ce n'est PAS IPsec (pas d'IKEv2 ni d'ESP) ;
+- pas de VRF, pas de NGFW, pas de SASE reel ;
+- cle AES statique et publique (dans compose.yaml) ;
+- les RTT locaux (environ 2 ms) ne representent pas la distance
+  Paris-Berlin.
+
+
+------------------------------------------------------------
+4. NOTIONS DE BASE A RETENIR
+------------------------------------------------------------
+SD-WAN
+  Reseau etendu pilote par logiciel : une politique centrale
+  choisit dynamiquement le meilleur transport selon l'application.
+
+Underlay
+  Les reseaux IP physiques ou operateur qui transportent les
+  paquets (ici : internet et mpls). Il ne connait pas les
+  applications.
+
+Overlay
+  Reseau logique construit par-dessus l'underlay (tunnels
+  chiffres entre Edges). Il porte les flux applicatifs.
+
+Les trois plans
+  - Plan de donnees : achemine reellement le trafic (Edges).
+  - Plan de controle : echange l'etat et les routes entre
+    equipements.
+  - Plan de gestion : configuration, politique, supervision
+    (manager, TCP 9000 dans le TP).
+  Un SD-WAN separe ces plans : une panne du manager n'arrete
+  pas le trafic.
+
+Edge
+  Equipement de site qui mesure les chemins, applique la
+  politique, chiffre et envoie le trafic.
+
+SLA et sondes
+  Chaque seconde, une sonde par transport. Fenetre de 12
+  echantillons pour le RTT moyen et la perte. Un transport est
+  "down" apres environ 3,5 s sans reponse.
+
+Choix du chemin (ordre de decision)
+  1. preferred-and-within-sla : le chemin prefere respecte le SLA.
+  2. alternate-within-sla : un autre chemin respecte le SLA.
+  3. degraded-no-path-meets-sla : aucun ne respecte le SLA, on
+     prend un chemin encore "up".
+  4. 503 no-underlay-available : aucun chemin disponible.
+  selected_path = la decision ; policy_reason = sa justification.
+
+Brownout et blackout
+  - Brownout : le lien repond mais trop lentement (qualite).
+    Indicateur : RTT moyen au-dessus du seuil, perte a 0 %.
+  - Blackout : plus de reponse (disponibilite).
+    Indicateur : perte qui monte, etat up=false.
+  Ils ne se diagnostiquent pas de la meme facon.
+
+Piege des mesures
+  Le RTT moyen ne porte que sur les sondes qui ont repondu. Un
+  lien mort peut afficher un RTT excellent. Toujours lire RTT +
+  perte + etat "up" ensemble.
+
+Flapping et hysteresis
+  Une bascule trop rapide provoque des allers-retours. Remede :
+  temporisation de maintien et seuil de retour plus strict que
+  le seuil de depart.
+
+Configuration centrale / transfert distribue
+  Le manager decide et distribue la politique (faible volume).
+  Chaque Edge execute localement avec la derniere politique en
+  cache. Manager arrete : controller_reachable=false, la
+  generation de politique reste figee, /erp continue de repondre.
+
+ZTP (Zero Touch Provisioning)
+  Un nouvel Edge se configure seul : DHCP/DNS/NTP, redirection
+  cloud (HTTPS 443), certificat d'entreprise (TLS/DTLS, PKI,
+  SCEP/EST), recuperation de la politique, puis creation des
+  tunnels IPsec.
+
+Segmentation
+  - VLAN : separation L2 ; VRF : separation du routage L3.
+  - ACL et pare-feu stateful entre segments, refus par defaut.
+  - Identite (802.1X, NAC) plutot que l'adresse IP.
+  Dans le TP, l'invite est isole par un reseau Docker et une
+  regle HTTP (403). Ce n'est ni un VRF ni une isolation complete.
+
+Local Internet breakout
+  Le trafic SaaS sort directement a Paris, sans passer par
+  l'overlay vers Berlin : moins de latence, moins de charge WAN.
+  A condition d'ajouter NGFW ou SSE en production.
+
+Place des briques de securite
+  - SD-WAN : connectivite et choix de chemin.
+  - NGFW : filtrage a etat, IPS, inspection TLS.
+  - SSE : services de securite dans le cloud (SWG, CASB, ZTNA).
+  - SASE : SD-WAN + SSE sous une gestion commune.
+  - Zero Trust : principe (ne jamais faire confiance par defaut).
+
+
+------------------------------------------------------------
+5. RESULTATS ET MESURES A RETENIR
+------------------------------------------------------------
+Etat nominal
+  internet RTT environ 2,7 ms, mpls environ 1,9 ms, perte 0 %.
+  ERP sur mpls, Teams sur internet, sauvegarde sur internet.
+  ping noyau : environ 0,13 ms (les sondes applicatives sont plus
+  lentes : Python, AES-GCM, JSON).
+
+Brownout (delai de 220 ms sur internet)
+  internet RTT environ 222,9 ms, perte 0 %.
+  Teams bascule sur mpls : alternate-within-sla.
+  ERP inchange sur mpls.
+
+Blackout (perte de 100 % sur mpls)
+  Perte mesuree : 25 %, 33 %, 42 % ... jusqu'a 100 %.
+  Une requete en 504 overlay-timeout pendant la detection (5 s),
+  puis bascule sur internet. Temps de reaction environ 6 s.
+  Resultat : degraded-no-path-meets-sla, car internet etait
+  encore a 222 ms (delai du brownout non retire).
+
+Tailles des datagrammes UDP 45900 (charge utile)
+  sonde 88 octets, pong 87, requete 100, reponse environ 317.
+  Surcout du chiffrement : 32 octets (marqueur 4 + nonce 12 +
+  etiquette GCM 16).
+
+Format d'une trame de l'overlay
+  octets 0-3 : marqueur E5A1 (45 35 41 31)
+  octets 4-15 : nonce de 12 octets
+  octets 16-fin : texte chiffre AES-256-GCM + etiquette de 16
+  octets. Les adresses IP externes et les ports restent en clair.
+
+Captures realisees
+  01_all_traffic.pcap, 02_overlay.pcap (obligatoires) ;
+  01b_mpls_only, 03_employee, 03_paris_edge, 04_guest_lan,
+  05_saas_breakout, 06_blackout_mpls, 07_control (facultatives).
+
+
+------------------------------------------------------------
+6. SECURITE : LES DEFAUTS VOLONTAIRES DU KIT
+------------------------------------------------------------
+1. Cle AES statique, partagee et publique (compose.yaml).
+   Correction : IPsec/IKEv2 + PKI, cles ephemeres (PFS), rekeying.
+2. Plan de controle en HTTP clair, sans authentification.
+   Correction : TLS mutuel, politique signee, VRF de gestion.
+3. Aucune protection contre le rejeu (nonce aleatoire sans
+   compteur). Correction : numero de sequence + fenetre
+   anti-rejeu (ESP).
+4. /lab/impair sans authentification pour tout client du LAN.
+5. Segment "invite" deduit de l'adresse, pas de l'identite.
+
+AES-GCM pedagogique vs IPsec ESP/IKEv2 :
+  cle statique vs cles derivees dynamiquement ; pas de rekeying
+  vs rekeying + PFS ; pas d'identite vs authentification mutuelle
+  par certificats ; pas d'anti-rejeu vs fenetre de sequence.
+  IPsec : IKEv2 en UDP 500 et 4500 (NAT-T), ESP = protocole IP 50.
+
+Le chiffrement protege le contenu, pas les metadonnees : on voit
+qui parle a qui, quand, combien d'octets, sur quel transport.
+
+
+------------------------------------------------------------
+7. COMMANDES ESSENTIELLES
+------------------------------------------------------------
+Demarrer et verifier
+  docker compose up -d --build --wait
+  docker compose ps
+  docker compose exec employee labwait
+  docker compose exec employee sla
+
+Interroger l'Edge
+  docker compose exec employee curl -s http://10.10.0.1:8080/status
+  docker compose exec employee curl -s http://10.10.0.1:8080/erp
+
+Injecter une degradation
+  .../lab/impair?path=internet&loss=0&delay_ms=220     (brownout)
+  .../lab/impair?path=mpls&loss=100&delay_ms=0         (blackout)
+  .../lab/impair?path=mpls&loss=0&delay_ms=0           (remise a 0)
+
+Capturer (toujours avec -Z root)
+  docker compose exec -d paris-edge sh -c 'timeout 40 tcpdump
+    -i any -nn -s 0 -U -Z root -w /captures/FICHIER.pcap'
+
+Analyser
+  tshark -r FICHIER.pcap -q -z conv,udp      (conversations)
+  tshark -r FICHIER.pcap -Y 'udp.port==45900' -x   (hexa)
+  tshark -r FICHIER.pcap -Y icmp -T fields -e ip.src -e ip.dst
+  decrypt-overlay FICHIER.pcap --kind req,resp
+
+Outils du kit : ifmap, labwait, sla, watchpath, proof,
+decrypt-overlay.
+
+Arreter / nettoyer
+  docker compose down
+  docker compose down --rmi all --volumes --remove-orphans
+
+
+------------------------------------------------------------
+8. PIEGES ET ERREURS A EVITER
+------------------------------------------------------------
+- Ne jamais supposer que eth0 est Internet : utiliser ifmap.
+- Attendre environ 15 s apres une remise a zero (fenetre de 12
+  mesures), sinon le resultat reste degrade.
+- Enchainer brownout puis blackout sans retirer le delai donne
+  degraded-no-path-meets-sla au lieu de alternate-within-sla.
+- Filtrer une capture sur host 172.28.10.40 ne peut pas prouver
+  l'absence d'UDP vers Berlin : utiliser decrypt-overlay et
+  chercher des messages kind=req.
+- Un ping reussi ne prouve pas que l'application fonctionne.
+  Contre-exemples : ERP arrete, overlay coupe, port UDP filtre.
+- Un 503 juste apres le demarrage est normal : labwait.
+- Docker reserve l'adresse .1 comme passerelle : conflit avec les
+  Edges si on ne la deplace pas (corrige en .254).
+- Les fichiers de captures/ appartiennent a root sur l'hote.
+
+
+------------------------------------------------------------
+9. A RETENIR POUR LA RESTITUTION
+------------------------------------------------------------
+1. Underlay (IP) et overlay (tunnels chiffres) sont deux couches
+   distinctes.
+2. Le choix de chemin repose sur des mesures, pas sur la simple
+   disponibilite du lien.
+3. Le plan de controle decide, le plan de donnees execute : une
+   panne du manager n'arrete pas le trafic.
+4. Brownout et blackout se detectent et se traitent differemment.
+5. Une preuve = sortie de commande horodatee + explication.
+6. Le laboratoire est pedagogique : savoir decrire ses limites
+   (pas d'IPsec, pas de MPLS reel, pas de NGFW) est valorise.
+7. En production : IPsec/IKEv2, PKI, HA des controleurs, NGFW/SSE,
+   segmentation de bout en bout, journalisation SIEM.
+
+Livrables : captures PCAP, preuves A a F, tableau avant/apres
+pannes, HLD/LLD, diagnostic final d'une page.
+Bareme : topologie 3, captures 5, SLA et pannes 5,
+securite 4, HLD/LLD et rapport 3 = 20 points.
