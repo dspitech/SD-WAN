@@ -249,8 +249,8 @@ Option 2 : conserver le groupe système inchangé et préfixer chaque commande p
 
 
 ```bash
-git clone https://github.com/dspitech/SD-WAN.git
-cd SD-WAN
+git clone https://github.com/dspitech/SD-WAN-TP3.git
+cd SD-WAN-TP3
 ls
 ```
 
